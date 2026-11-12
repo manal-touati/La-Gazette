@@ -1,0 +1,190 @@
+# La gazette : l'environnement de dev décrit en code.
+# Même fichier sur nos PC et sur la VM fournie (TD 4/6). Voir docs/architecture.md.
+#
+#   bin/dev      # équivaut à : docker compose up -d --build
+#
+# Aucun réglage n'est obligatoire en dev : les valeurs par défaut ci-dessous suffisent.
+# Sur la VM, un fichier .env (modèle : .env.example) remplace les mots de passe et secrets.
+name: la-gazette
+
+x-airflow-common: &airflow-common
+  # Image construite par le service airflow-init, puis réutilisée par les autres services Airflow.
+  image: la-gazette/airflow:3.3.2
+  environment: &airflow-common-env
+    # --- Airflow ---
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    # Nombre max de tâches en parallèle (machines à ~4 Go de RAM).
+    AIRFLOW__CORE__PARALLELISM: "4"
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:-airflow}@postgres:5432/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    # Un DAG ajouté est en pause : on l'active à la main dans l'UI.
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    # Horaires des DAGs (collecte, édition de 6 h) exprimés à l'heure de Paris.
+    # Les données, elles, sont stockées en UTC (docs/cadrage.md, risques).
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: Europe/Paris
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    # Secret commun à l'api-server et au scheduler pour signer les jetons des tâches :
+    # s'il diffère d'un conteneur à l'autre, toutes les tâches échouent.
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-dev-uniquement-a-remplacer-sur-la-vm-0123456789abcdef0123456789abcdef}
+    AIRFLOW__API_AUTH__JWT_ISSUER: la-gazette
+    AIRFLOW__API__WORKERS: "1"
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    # --- Application (src/gazette) ---
+    PYTHONPATH: /opt/airflow/src
+    PYTHONDONTWRITEBYTECODE: "1"
+    GAZETTE_DATABASE_URL: postgresql://gazette:${GAZETTE_DB_PASSWORD:-gazette}@postgres:5432/gazette
+    GAZETTE_SOURCES_FILE: /opt/airflow/sources.csv
+    GAZETTE_EDITIONS_DIR: /opt/airflow/editions
+    GAZETTE_USER_AGENT: ${GAZETTE_USER_AGENT:-LaGazette/0.1 (projet etudiant)}
+  volumes:
+    # Code monté depuis le dépôt : pas besoin de reconstruire l'image après une modif.
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/src
+    - ./tests:/opt/airflow/tests
+    - ./sources.csv:/opt/airflow/sources.csv:ro
+    # Données produites : volumes Docker (pas de souci de droits entre Windows et Linux).
+    - airflow-logs:/opt/airflow/logs
+    - editions:/opt/airflow/editions
+  depends_on: &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+
+services:
+  # L'application : l'image du Dockerfile racine, celle que publie la CI.
+  # Au démarrage, elle lit une première source et écrit ses items en JSON (volume app-data).
+  # Autre source : docker compose run --rm app collect "Nice-Matin"
+  app:
+    build:
+      context: .
+      target: runtime
+    image: la-gazette/app:dev
+    command: ["collect", "La Croix"]
+    environment:
+      GAZETTE_USER_AGENT: ${GAZETTE_USER_AGENT:-LaGazette/0.1 (projet etudiant)}
+    volumes:
+      - app-data:/data
+    restart: "no"
+
+  postgres:
+    image: postgres:17
+    environment:
+      # Base "gazette" : raw, staging, analytics, ops (infra/postgres/init/).
+      POSTGRES_USER: gazette
+      POSTGRES_PASSWORD: ${GAZETTE_DB_PASSWORD:-gazette}
+      POSTGRES_DB: gazette
+      # Lu par 00_create_databases.sql pour créer la base des métadonnées d'Airflow.
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Scripts exécutés une seule fois, au premier démarrage (volume pgdata vide).
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      # Accessible depuis la machine hôte uniquement (psql, DBeaver...).
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      # -h 127.0.0.1 : on attend le vrai serveur TCP, pas celui des scripts d'init.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "gazette", "-d", "gazette"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # Construit l'image Airflow, migre sa base, crée le compte admin et prépare les
+  # volumes, puis s'arrête. Les autres services Airflow attendent qu'il ait réussi.
+  airflow-init:
+    <<: *airflow-common
+    build:
+      context: .
+      dockerfile: infra/airflow/Dockerfile
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -e
+        mkdir -p /opt/airflow/logs /opt/airflow/editions
+        chown -R 50000:0 /opt/airflow/logs /opt/airflow/editions
+        /entrypoint airflow version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+    user: "0:0"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      # UI non exposée sur le réseau : sur la VM, passer par un tunnel SSH.
+      - "127.0.0.1:${AIRFLOW_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Avec le LocalExecutor, les tâches s'exécutent dans ce conteneur.
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Sert les éditions (AAAA-MM-JJ.html / .md) écrites par Airflow dans le volume "editions".
+  nginx:
+    image: nginx:1.30-alpine
+    volumes:
+      - editions:/srv/editions:ro
+      - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${EDITIONS_PORT:-8000}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    depends_on:
+      # airflow-init crée le volume "editions" avec les bons droits d'écriture.
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
+  airflow-logs:
+  editions:
+  app-data:

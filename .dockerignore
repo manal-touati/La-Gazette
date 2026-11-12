@@ -1,0 +1,10 @@
+# Contexte de build des images : seulement ce dont elles ont besoin.
+# Tout le reste (.git, .env, docs, données locales) est exclu.
+*
+!pyproject.toml
+!README.md
+!sources.csv
+!src
+!tests
+**/__pycache__
+**/*.pyc

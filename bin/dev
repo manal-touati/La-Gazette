@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Environnement de dev (docker-compose.yml) : Postgres, Airflow, nginx et l'application,
+# qui lit une première source au démarrage.
+#
+#   bin/dev          démarre tout (construit les images si besoin)
+#   bin/dev stop     arrête tout (les données sont conservées)
+#   bin/dev logs     suit les logs de tous les services
+#   bin/dev reset    arrête tout et SUPPRIME les données (base, éditions, collectes)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+case "${1:-up}" in
+  up)
+    docker compose up -d --build
+    echo
+    echo "Airflow   : http://$(docker compose port airflow-apiserver 8080)  (admin / admin, sauf si .env les change)"
+    echo "Éditions  : http://$(docker compose port nginx 80 | sed 's/0\.0\.0\.0/localhost/')"
+    echo "Postgres  : $(docker compose port postgres 5432)  (base et utilisateur : gazette)"
+    echo "Collecte  : docker compose logs app"
+    ;;
+  stop)
+    docker compose down
+    ;;
+  logs)
+    docker compose logs -f --tail=100
+    ;;
+  reset)
+    docker compose down -v
+    ;;
+  *)
+    echo "Usage : bin/dev [up|stop|logs|reset]" >&2
+    exit 1
+    ;;
+esac

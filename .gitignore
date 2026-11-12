@@ -1,0 +1,15 @@
+# Secrets locaux
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Sorties locales (collectes JSON, éditions, logs)
+data/
+editions/
+logs/

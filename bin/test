@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Lint + tests, les mêmes contrôles que la CI, dans un conteneur : seul Docker est requis.
+#
+#   bin/test                  ruff check, ruff format --check, puis pytest
+#   bin/test -k robots -v     lance seulement pytest, avec ces arguments
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+docker build --target test --tag la-gazette:test .
+if [ "$#" -gt 0 ]; then
+  docker run --rm la-gazette:test pytest "$@"
+else
+  docker run --rm la-gazette:test
+fi

@@ -1,0 +1,5 @@
+# Fins de ligne normalisées. Les scripts shell gardent LF même sous Windows,
+# sinon bash échoue sur les \r.
+* text=auto
+bin/* text eol=lf
+*.sh text eol=lf
