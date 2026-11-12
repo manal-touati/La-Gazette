@@ -39,6 +39,30 @@ bin/test -k robots     # seulement pytest, avec ces arguments
 
 Sans Docker, dans un environnement Python 3.12 : `pip install -e ".[dev]"`, puis `ruff check .`, `ruff format .` et `pytest`.
 
+## Règles de transformation
+
+La transformation traite actuellement une source à la fois.
+
+### Règles sur chaque article
+
+- **R-001** — Nettoyer les balises HTML et les espaces superflus ;
+- **R-002** — Conserver uniquement les articles des dernières 24 heures ;
+- **R-003** — Vérifier que le titre et le résumé ne sont pas vides ;
+- **R-004** — Vérifier que l’URL est valide et utilise HTTP ou HTTPS ;
+- **R-005** — Rejeter les dates futures ;
+- **R-006** — Rejeter les encodages cassés ;
+- **R-007** — Rejeter les publi-reportages et contenus partenaires ;
+- **R-008** — Rejeter les horoscopes, programmes TV, jeux et concours ;
+- **R-009** — Rejeter les doublons exacts ;
+- **R-010** — Rejeter les titres très similaires dans une même source.
+
+### Règles après croisement des sources
+
+- **R-011** — Détecter les doublons entre journaux ;
+- **R-012** — Détecter les dépêches d’agence reprises à l’identique par plusieurs sources ;
+- **R-013** — Calculer le taux de rejet par source ;
+- **R-014** — Alerter lorsqu’une source dépasse le seuil de 80 % de rejets.
+
 ## Contribuer
 
 Une branche par sujet, une pull request vers `main`, la CI verte et une relecture avant de fusionner : tout est dans [CONTRIBUTING.md](CONTRIBUTING.md).
